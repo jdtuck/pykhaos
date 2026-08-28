@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .linalg import logdet_spd
+from .linalg import safe_logdet
 
 __all__ = [
     "g_weight",
@@ -71,11 +71,9 @@ def log_dgsq_full(theta: float, a: float, b: float, gm: np.ndarray,
     gm = np.asarray(gm, dtype=float)
     M = gm.shape[0]
     Sigma_inv = build_G(gm, theta) * BtB
-    ld = logdet_spd(Sigma_inv)
+    ld = safe_logdet(Sigma_inv)
     if ld is None:
-        sign, ld = np.linalg.slogdet(Sigma_inv)
-        if sign <= 0:
-            return -np.inf
+        return -np.inf
     return float(-(a + M / 2.0) * np.log(theta) - b / theta - 0.5 * ld)
 
 

@@ -1,5 +1,7 @@
 """Linear-algebra helpers and the modified g-prior's Laplace machinery."""
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -13,7 +15,13 @@ from khaos.gprior import (
     log_dgsq_full,
     log_dgsq_orth,
 )
-from khaos.linalg import logdet_spd, rcond1, rmvnorm_eigen, safe_inverse
+from khaos.linalg import (
+    logdet_spd,
+    rcond1,
+    rmvnorm_eigen,
+    safe_inverse,
+    safe_logdet,
+)
 
 
 def _spd(k, seed=0, cond=None):
@@ -147,3 +155,22 @@ def test_laplace_full_finds_a_stationary_point():
 def test_laplace_returns_none_on_degenerate_input():
     # A wildly mis-specified curvature should be reported, not silently used.
     assert laplace_orth(0.0, 0.0, np.array([1.0])) is None
+
+
+# --------------------------------------------------------------------------
+def test_safe_logdet_agrees_with_cholesky():
+    A = _spd(6, seed=4)
+    assert safe_logdet(A) == pytest.approx(np.linalg.slogdet(A)[1])
+
+
+def test_safe_logdet_rejects_singular_without_warning():
+    """A singular matrix is a handled outcome, not a source of RuntimeWarnings."""
+    A = np.ones((4, 4))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        assert safe_logdet(A) is None
+
+
+def test_safe_logdet_rejects_negative_determinant():
+    A = np.diag([1.0, -2.0, 3.0])
+    assert safe_logdet(A) is None

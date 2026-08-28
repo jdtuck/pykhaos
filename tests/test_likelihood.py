@@ -14,6 +14,7 @@ which shares no code with the implementation.
 
 import numpy as np
 import pytest
+from scipy.linalg import cho_factor, cho_solve
 
 from khaos.likelihood import (
     GPriorState,
@@ -25,10 +26,20 @@ from khaos.likelihood import (
 
 
 def _reference_log_marginal(B, S0, y, a_sigma, b_sigma):
+    """Independent n x n evaluation of the NIG log marginal (up to constants).
+
+    ``V = I + B S0 B'`` is symmetric positive definite by construction (it is
+    the identity plus a PSD term), so this goes through a Cholesky factor
+    rather than ``slogdet``.  Cholesky is both the numerically right tool here
+    and warning-free: ``np.linalg.slogdet`` reaches ``log(0)`` on a singular
+    LU pivot and emits divide-by-zero / overflow / invalid RuntimeWarnings
+    whose triggering varies with the LAPACK build.
+    """
     n = y.shape[0]
     V = np.eye(n) + B @ S0 @ B.T
-    sign, logdet = np.linalg.slogdet(V)
-    quad = float(y @ np.linalg.solve(V, y))
+    c, low = cho_factor(V, lower=True)
+    logdet = 2.0 * np.log(np.diag(c)).sum()
+    quad = float(y @ cho_solve((c, low), y))
     return -0.5 * logdet - (a_sigma + n / 2.0) * np.log(b_sigma + 0.5 * quad)
 
 

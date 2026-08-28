@@ -38,4 +38,9 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-filterwarnings = ["ignore::DeprecationWarning"]
+filterwarnings = [
+  # Floating-point RuntimeWarnings must not escape: every place the sampler
+  # can hit a singular matrix handles it explicitly (see linalg.safe_logdet).
+  "error::RuntimeWarning",
+  "ignore::DeprecationWarning",
+]

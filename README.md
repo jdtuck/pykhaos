@@ -17,7 +17,7 @@ Ported: `adaptive_khaos` (both the ridge and the modified-g-prior variants),
 ```bash
 pip install -e .            # numpy, scipy, numba, threadpoolctl
 pip install -e ".[dev]"     # + pytest, matplotlib, pandas
-pytest                      # 98 tests, ~20 s
+pytest                      # 101 tests, ~25 s
 ```
 
 Numba is optional at runtime: set `KHAOS_NO_NUMBA=1` to fall back to pure NumPy
@@ -192,6 +192,11 @@ independent references rather than the implementation itself:
   that a death exactly undoes the matching birth.
 - Incremental `B'B` / `B'y` updates vs full recomputation.
 - Laplace fits vs a grid search over the log posterior they approximate.
+- Singular matrices are a *handled* outcome everywhere (the move is rejected),
+  so the suite runs with `error::RuntimeWarning` — no floating-point warning is
+  allowed to escape. Log-determinants go through `linalg.safe_logdet`, which
+  tries Cholesky and only falls back to `slogdet` under `np.errstate`, since
+  whether `slogdet` warns on a near-singular pivot depends on the LAPACK build.
 - End to end: recovery of a known two-term expansion, of the active variable
   set, of σ², and of the analytic Sobol shares for an additive and a pure
   interaction target; seeded reproducibility; `degree`/`order`/`max_basis`

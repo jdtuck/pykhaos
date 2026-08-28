@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 from scipy.linalg import lapack
 
-__all__ = ["rcond1", "safe_inverse", "logdet_spd", "rmvnorm_eigen"]
+__all__ = ["rcond1", "safe_inverse", "logdet_spd", "safe_logdet", "rmvnorm_eigen"]
 
 
 def rcond1(A: np.ndarray) -> float:
@@ -62,6 +62,28 @@ def logdet_spd(A: np.ndarray):
     if info != 0:
         return None
     return float(2.0 * np.log(np.diag(c)).sum())
+
+
+def safe_logdet(A: np.ndarray):
+    """``log|A|`` for a matrix that *should* be SPD, or ``None``.
+
+    Tries Cholesky first (fast, and the right factorisation for the matrices
+    the sampler builds).  If that fails the matrix is not numerically positive
+    definite, which is an expected, handled outcome -- the caller rejects the
+    move -- so the LU fallback runs with floating-point warnings suppressed:
+    ``slogdet`` on a singular matrix legitimately produces ``log(0)`` and would
+    otherwise emit divide-by-zero / overflow / invalid RuntimeWarnings whose
+    exact triggering depends on the LAPACK build.  ``None`` is returned unless
+    the fallback yields a positive determinant and a finite log.
+    """
+    ld = logdet_spd(A)
+    if ld is not None:
+        return ld
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        sign, ld = np.linalg.slogdet(np.asarray(A, dtype=float))
+    if sign <= 0 or not np.isfinite(ld):
+        return None
+    return float(ld)
 
 
 def rmvnorm_eigen(

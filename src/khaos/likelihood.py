@@ -28,7 +28,7 @@ from typing import Optional
 import numpy as np
 
 from .gprior import build_G, g_weight
-from .linalg import logdet_spd, rcond1, safe_inverse
+from .linalg import rcond1, safe_inverse, safe_logdet
 
 __all__ = ["RidgeState", "GPriorState", "Candidate"]
 
@@ -124,19 +124,27 @@ class RidgeState:
         self.B = np.asarray(B, dtype=float)
         self.BtB = self.B.T @ self.B
         self.v = self.B.T @ self.y
-        self.Vinv, self.d, self.ldet_Vinv = self._stats(self.BtB, self.v)
+        stats = self._stats(self.BtB, self.v)
+        if stats is None:
+            raise np.linalg.LinAlgError(
+                "initial design matrix is numerically singular"
+            )
+        self.Vinv, self.d, self.ldet_Vinv = stats
 
     # -- internals ---------------------------------------------------------
     def _stats(self, BtB, v):
         k = BtB.shape[0]
         Vinv = BtB + np.eye(k) / self.tau2
-        ld = logdet_spd(Vinv)
+        ld = safe_logdet(Vinv)
         if ld is None:
-            sign, ld = np.linalg.slogdet(Vinv)
-        bhat = np.linalg.solve(Vinv, v)
+            return None
+        try:
+            bhat = np.linalg.solve(Vinv, v)
+        except np.linalg.LinAlgError:
+            return None
         quad = self.ssy - float(bhat @ (Vinv @ bhat))
         d = self.b_sigma + self.quad_scale * quad
-        return Vinv, d, float(ld)
+        return Vinv, d, ld
 
     def _ratio(self, ldet_cand, d_cand, tau_term):
         if not np.isfinite(d_cand) or d_cand <= 0:
@@ -151,7 +159,10 @@ class RidgeState:
         # R guards every move with safe_solve(crossprod(B)); reproduce that.
         if rcond1(BtB) < self.rcond_tol:
             return None
-        Vinv, d, ld = self._stats(BtB, v)
+        stats = self._stats(BtB, v)
+        if stats is None:
+            return None
+        Vinv, d, ld = stats
         ratio = self._ratio(ld, d, tau_term)
         if ratio is None:
             return None
@@ -236,18 +247,20 @@ class GPriorState:
         self.Sigma = np.linalg.inv(self.G * self.BtB)
         self.quad = self.ssy - float(self.v @ (self.Sigma @ self.v))
         self.Q = self.b_sigma + 0.5 * self.quad
-        self.ldet = logdet_spd(self.Sigma)
+        self.ldet = safe_logdet(self.Sigma)
         if self.ldet is None:
-            _s, self.ldet = np.linalg.slogdet(self.Sigma)
+            raise np.linalg.LinAlgError(
+                "initial design matrix is numerically singular"
+            )
         self.ldet_S0 = self._logdet_S0(self.g_vec, g0sq, self.BtB)
 
     def _logdet_S0(self, g_vec, g0sq, BtB) -> float:
         """``log|S_0|`` for the modified g-prior; 0 when the term is disabled."""
         if not self.exact_marginal:
             return 0.0
-        ld = logdet_spd(BtB)
+        ld = safe_logdet(BtB)
         if ld is None:
-            _s, ld = np.linalg.slogdet(BtB)
+            return np.nan
         k = len(g_vec)
         return float(k * np.log(g0sq) + 2.0 * np.log(g_vec).sum() - ld)
 
@@ -259,11 +272,9 @@ class GPriorState:
         Q = self.b_sigma + 0.5 * quad
         if not np.isfinite(Q) or Q <= 0:
             return None
-        ldet = logdet_spd(Sigma)
+        ldet = safe_logdet(Sigma)
         if ldet is None:
-            sign, ldet = np.linalg.slogdet(Sigma)
-            if sign <= 0:
-                return None
+            return None
         ldet_S0 = self._logdet_S0(g_vec, g0sq, BtB)
         ratio = float(
             0.5 * (ldet - self.ldet)
@@ -321,7 +332,7 @@ class GPriorState:
         Sigma = safe_inverse(G * self.BtB, self.rcond_tol)
         if Sigma is None:
             return False
-        ldet = logdet_spd(Sigma)
+        ldet = safe_logdet(Sigma)
         if ldet is None:
             return False
         self.G = G
