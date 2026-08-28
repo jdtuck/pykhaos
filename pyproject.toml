@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "khaos"
+version = "0.1.0"
+description = "Bayesian adaptive polynomial chaos expansions (RJMCMC) in Python"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "BSD-3-Clause" }
+authors = [{ name = "Python port" }]
+keywords = ["polynomial chaos", "surrogate model", "RJMCMC", "Sobol", "Bayesian"]
+classifiers = [
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: BSD License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Mathematics",
+]
+dependencies = [
+  "numpy>=1.23",
+  "scipy>=1.9",
+  "numba>=0.57",
+  "threadpoolctl>=3.0",
+]
+
+[project.optional-dependencies]
+plot = ["matplotlib>=3.6"]
+test = ["pytest>=7.0"]
+dev = ["pytest>=7.0", "matplotlib>=3.6", "pandas>=1.5"]
+
+[project.urls]
+"Reference implementation" = "https://github.com/knrumsey/khaos"
+"Paper" = "https://doi.org/10.1002/sta4.70151"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
