@@ -1,3 +1,5 @@
+[![Pipeline Status](https://github.com/jdtuck/pykhaos/actions/workflows/Build.yml/badge.svg)](https://github.com/jdtuck/pykhaos/actions/workflows/Build.yml)
+
 # pykhaos (Python)
 
 Bayesian **adaptive polynomial chaos expansions** via reversible-jump MCMC — a
