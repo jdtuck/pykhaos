@@ -1,6 +1,4 @@
-[![Pipeline Status](https://github.com/jdtuck/pykhaos/actions/workflows/Build.yml/badge.svg)](https://github.com/jdtuck/pykhaos/actions/workflows/Build.yml)
-
-# khaos (Python)
+# pykhaos (Python)
 
 Bayesian **adaptive polynomial chaos expansions** via reversible-jump MCMC — a
 NumPy/SciPy/Numba port of the adaptive sampler in the [`khaos` R
@@ -19,7 +17,7 @@ Ported: `adaptive_khaos` (both the ridge and the modified-g-prior variants),
 ```bash
 pip install -e .            # numpy, scipy, numba, threadpoolctl
 pip install -e ".[dev]"     # + pytest, matplotlib, pandas
-pytest                      # 101 tests, ~25 s
+pytest                      # 128 tests, ~25 s
 ```
 
 Numba is optional at runtime: set `KHAOS_NO_NUMBA=1` to fall back to pure NumPy
@@ -32,7 +30,7 @@ import numpy as np
 import khaos
 
 rng = np.random.default_rng(0)
-X = rng.random((500, 10))                    # inputs must be scaled to [0, 1]
+X = rng.random((500, 10))                    # any units — see "Input scaling"
 y = (10 * np.sin(np.pi * X[:, 0] * X[:, 1])
      + 20 * (X[:, 2] - 0.5) ** 2
      + 10 * X[:, 3] + 5 * X[:, 4]
@@ -66,7 +64,8 @@ x5 0.09, inert inputs 0.000) match the analytic Sobol decomposition.
 
 ## The model
 
-Inputs live on the unit hypercube, so the univariate basis is the standardised
+Inputs live on the unit hypercube (see **Input scaling** below), so the
+univariate basis is the standardised
 shifted Legendre polynomial `ψ_α(x) = √(2α+1) P_α(2x−1)`, orthonormal under the
 uniform measure. Basis functions are tensor products over the active inputs:
 
@@ -99,6 +98,45 @@ so higher-degree, higher-order terms are shrunk harder; `ζ = 0` recovers the
 standard g-prior. The posterior precision is `G ∘ Ψ'Ψ` with
 `G_{mℓ} = 1 + 1/(g₀² g_m g_ℓ)`, and g₀² is updated by MH against a Laplace
 approximation (`g2_sample` picks which one).
+
+## Input scaling
+
+The basis is orthonormal with respect to the uniform measure on `[0, 1]^p`, so
+the sampler needs inputs on that cube — but you don't have to put them there.
+A fit carries an `InputScaler`, an affine per-column map applied on the way in
+and re-applied to every `newdata` you pass to `predict`, so you work in your
+own units throughout.
+
+```python
+fit = khaos.adaptive_khaos(X, y, x_range=[lower, upper])   # (2, p) or a pair
+fit.predict(X_new)      # X_new in the same physical units
+fit.scaler              # InputScaler(lower=..., upper=...)
+fit.X, fit.X_scaled     # what you passed / what the sampler saw
+```
+
+`scale_inputs` picks the policy:
+
+| value | behaviour |
+|---|---|
+| `"auto"` (default) | Leave inputs alone when they already lie in `[0, 1]`; otherwise fit a per-column min-max map to the data. Already-scaled problems stay **bit-identical** to an unscaled fit. |
+| `True` / `"minmax"` | Always fit a min-max map from the data. |
+| `False` | No rescaling; warn if the data leaves the cube (the pre-scaling behaviour). |
+
+`x_range` gives explicit bounds and overrides the data range. **Prefer it when
+you know the real input ranges.** Min-max from the data ties the fit to the
+observed spread, so two samples from the same system scale differently and the
+models aren't comparable; it also puts training points exactly on the boundary,
+leaving no room before `predict` starts extrapolating. Predicting outside the
+scaled box warns — high-degree Legendre polynomials diverge quickly out there.
+
+Two things worth knowing. The map is affine, so it changes nothing about the
+model: degrees, the admissible set, priors and proposals are all untouched, and
+fitting shifted/stretched inputs with the matching `x_range` reproduces the
+hand-scaled fit exactly (there's a test). But it does pin down the measure the
+**Sobol indices** are taken with respect to — they are variance shares under a
+uniform distribution over that box, so choosing the box deliberately changes
+what they mean. A constant input column is mapped to 0.5 with a warning rather
+than dividing by zero.
 
 ## Where this differs from the R reference
 
@@ -169,6 +207,10 @@ AdaptiveKhaos: .predict(newdata, mcmc_use, nugget, nreps, seed)
                .sobol()  .plot()  .design_matrix(newdata, i)
                .acceptance_rates()  .n_samples
                .nbasis .beta .vars .degs .nint .dtot .s2 .lam .g2 .eta
+               .scaler .X .X_scaled
+
+InputScaler:   .transform(X, clip)  .inverse_transform(Z)  .out_of_range(Z)
+               .from_data(X)  .from_range(x_range, p)  .identity_map(p)
 
 SobolResult:   .S (partial, per interaction set)  .labels
                .T (total-effect)  .first_order  .leftover
@@ -193,6 +235,9 @@ independent references rather than the implementation itself:
   test; also that `ζ = 0` reproduces the classical g-prior Bayes factor, and
   that a death exactly undoes the matching birth.
 - Incremental `B'B` / `B'y` updates vs full recomputation.
+- Rescaling is a pure change of variables: a fit on shifted/stretched inputs
+  with the matching `x_range` is bit-identical to the hand-scaled fit, its
+  Sobol indices are unchanged, and `"auto"` leaves already-scaled data alone.
 - Laplace fits vs a grid search over the log posterior they approximate.
 - Singular matrices are a *handled* outcome everywhere (the move is rejected),
   so the suite runs with `error::RuntimeWarning` — no floating-point warning is

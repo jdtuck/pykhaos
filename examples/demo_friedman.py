@@ -7,6 +7,10 @@ Fits both coefficient priors to n = 500 points of
 (the last five inputs are inert), then reports held-out accuracy, coverage of
 the 90% predictive interval, and posterior Sobol indices.
 
+The inputs are handed to the sampler in arbitrary physical units, not on
+[0, 1] -- ``x_range`` tells it the box to scale from, and everything after
+that (including ``predict``) speaks those same units.
+
 Run with::
 
     python examples/demo_friedman.py
@@ -34,13 +38,26 @@ def main(seed: int = 0) -> None:
     rng = np.random.default_rng(seed)
     n, p, noise = 500, 10, 1.0
 
-    X = rng.random((n, p))
-    y = friedman(X) + rng.normal(0.0, noise, n)
-    X_test = rng.random((2000, p))
-    y_test = friedman(X_test)                       # noise-free truth
+    # Arbitrary per-input physical ranges, to exercise the rescaling.
+    lower = np.linspace(-50.0, 5.0, p)
+    upper = lower + np.linspace(2.0, 400.0, p)
+    box = np.vstack([lower, upper])
+
+    def to_units(U):
+        return lower + U * (upper - lower)
+
+    U = rng.random((n, p))
+    X = to_units(U)
+    y = friedman(U) + rng.normal(0.0, noise, n)
+
+    U_test = rng.random((2000, p))
+    X_test = to_units(U_test)
+    y_test = friedman(U_test)                       # noise-free truth
     y_test_obs = y_test + rng.normal(0.0, noise, X_test.shape[0])
 
     print(f"n = {n}, p = {p} (5 active), noise sd = {noise}")
+    print(f"input ranges: x1 in [{lower[0]:.1f}, {upper[0]:.1f}], "
+          f"..., x{p} in [{lower[-1]:.1f}, {upper[-1]:.1f}]")
     print(f"numba acceleration: {khaos.HAVE_NUMBA}\n")
 
     fits = {}
@@ -52,6 +69,7 @@ def main(seed: int = 0) -> None:
                 prior_type=prior,
                 degree=10,
                 order=3,
+                x_range=box,                # inputs are in physical units
                 nmcmc=20_000,
                 nburn=10_000,
                 thin=10,

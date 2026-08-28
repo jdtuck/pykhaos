@@ -187,12 +187,23 @@ def test_input_validation():
                        verbose=False)
 
 
-def test_warns_when_inputs_are_not_scaled():
+def test_unscaled_inputs_are_rescaled_by_default():
+    """Out-of-range inputs are handled, not merely complained about."""
+    rng = np.random.default_rng(0)
+    X = rng.random((40, 2)) * 10
+    y = rng.normal(size=40)
+    fit = adaptive_khaos(X, y, nmcmc=50, nburn=10, seed=0, verbose=False)
+    assert not fit.scaler.identity
+    assert fit.X_scaled.max() <= 1.0 and fit.X_scaled.min() >= 0.0
+
+
+def test_warns_when_rescaling_is_switched_off():
     rng = np.random.default_rng(0)
     X = rng.random((40, 2)) * 10
     y = rng.normal(size=40)
     with pytest.warns(UserWarning, match="scaled"):
-        adaptive_khaos(X, y, nmcmc=50, nburn=10, seed=0, verbose=False)
+        adaptive_khaos(X, y, scale_inputs=False, nmcmc=50, nburn=10, seed=0,
+                       verbose=False)
 
 
 def test_order_is_capped_at_p():

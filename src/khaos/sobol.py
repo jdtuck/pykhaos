@@ -12,6 +12,12 @@ basis function depends on exactly one subset :math:`u` of the inputs, so
     \\qquad S_u = \\frac{V_u}{\\mathrm{Var}(f(x))},
     \\qquad T_i = \\sum_{u \\ni i} S_u .
 
+Indices are variance shares under a *uniform distribution over the box the
+inputs were scaled from* -- the unit cube for already-scaled data, otherwise
+the range given by ``x_range`` or taken from the training data (see
+:mod:`khaos.scaling`).  Choosing that box deliberately therefore changes what
+the indices mean.
+
 Following the R implementation, the denominator is
 :math:`\\sum_m \\beta_m^2 + \\sigma^2`, i.e. the *observation* variance rather
 than the function variance -- so ``leftover`` is the fraction of variance left

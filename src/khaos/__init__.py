@@ -14,7 +14,7 @@ Quick start
 >>> import numpy as np
 >>> from khaos import adaptive_khaos, sobol_khaos
 >>> rng = np.random.default_rng(0)
->>> X = rng.random((150, 4))
+>>> X = rng.random((150, 4))   # any units; rescaled onto [0, 1] for you
 >>> y = np.sin(np.pi * X[:, 0]) + 2 * (X[:, 1] - 0.5) ** 2 + rng.normal(0, .05, 150)
 >>> fit = adaptive_khaos(X, y, prior_type="gprior", nmcmc=3000, nburn=2000,
 ...                      seed=1, verbose=False)
@@ -33,6 +33,7 @@ from .basis import legendre_poly, make_basis, make_basis_matrix, ss_legendre_pol
 from .gprior import build_G, g_weight
 from .model import AdaptiveKhaos
 from .proposals import A_size, log_A_size, make_weights, random_partition
+from .scaling import InputScaler
 from .sobol import SobolResult, sobol_khaos
 from .threads import single_threaded_blas
 
@@ -44,6 +45,7 @@ __all__ = [
     "adaptive_khaos_gprior",
     "CoinPars",
     "AdaptiveKhaos",
+    "InputScaler",
     "sobol_khaos",
     "SobolResult",
     "legendre_poly",

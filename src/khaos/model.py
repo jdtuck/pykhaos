@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
 
 from .basis import make_basis
+from .scaling import InputScaler
 
 __all__ = ["AdaptiveKhaos"]
 
@@ -19,7 +21,12 @@ class AdaptiveKhaos:
     Attributes
     ----------
     X, y : ndarray
-        Training data.
+        Training data, in the units the caller supplied.
+    scaler : InputScaler
+        Affine map from those units onto the unit hypercube.  Applied
+        automatically to any ``newdata``.
+    X_scaled : ndarray
+        ``scaler.transform(X)`` -- what the sampler actually saw.
     prior_type : {'ridge', 'gprior'}
     nbasis : ndarray of shape (n_keep,)
         Number of basis functions :math:`M` at each retained iteration.
@@ -65,6 +72,14 @@ class AdaptiveKhaos:
     count_accept: dict
     count_propose: dict
     B: np.ndarray = field(repr=False, default=None)
+    scaler: Optional[InputScaler] = None
+    X_scaled: Optional[np.ndarray] = field(repr=False, default=None)
+
+    def __post_init__(self):
+        if self.scaler is None:
+            self.scaler = InputScaler.identity_map(self.X.shape[1])
+        if self.X_scaled is None:
+            self.X_scaled = self.scaler.transform(self.X)
 
     # ------------------------------------------------------------------
     @property
@@ -80,11 +95,38 @@ class AdaptiveKhaos:
             for k in self.count_propose
         }
 
-    def design_matrix(self, newdata, iteration: int) -> np.ndarray:
-        """Design matrix ``[1, Psi_1, ..., Psi_M]`` for one posterior draw."""
+    def _prepare(self, newdata, warn: bool = True) -> np.ndarray:
+        """Coerce and rescale user-space inputs onto the unit hypercube."""
         newdata = np.asarray(newdata, dtype=float)
         if newdata.ndim == 1:
             newdata = newdata[:, None]
+        if newdata.shape[1] != self.X.shape[1]:
+            raise ValueError(
+                f"expected {self.X.shape[1]} columns, got {newdata.shape[1]}"
+            )
+        Z = self.scaler.transform(newdata)
+        if warn:
+            outside = self.scaler.out_of_range(Z)
+            if np.any(outside):
+                warnings.warn(
+                    f"{int(outside.sum())} of {Z.shape[0]} prediction rows "
+                    "fall outside the range the model was scaled to; "
+                    "polynomial extrapolation there is unreliable.",
+                    stacklevel=3,
+                )
+        return Z
+
+    def design_matrix(self, newdata, iteration: int,
+                      rescale: bool = True) -> np.ndarray:
+        """Design matrix ``[1, Psi_1, ..., Psi_M]`` for one posterior draw.
+
+        ``newdata`` is in the caller's units unless ``rescale=False``, which
+        treats it as already living on the unit hypercube.
+        """
+        newdata = (
+            self._prepare(newdata, warn=False) if rescale
+            else np.atleast_2d(np.asarray(newdata, dtype=float))
+        )
         M = int(self.nbasis[iteration])
         B = np.ones((newdata.shape[0], M + 1))
         for j in range(M):
@@ -107,7 +149,8 @@ class AdaptiveKhaos:
         Parameters
         ----------
         newdata : array_like of shape (n_new, p), optional
-            Defaults to the training inputs.
+            In the caller's own units -- the fit's :attr:`scaler` is applied
+            for you.  Defaults to the training inputs.
         mcmc_use : sequence of int, optional
             Which retained iterations to use; defaults to all of them.
         nugget : bool
@@ -122,10 +165,9 @@ class AdaptiveKhaos:
         """
         rng = np.random.default_rng(seed)
         if newdata is None:
-            newdata = self.X
-        newdata = np.asarray(newdata, dtype=float)
-        if newdata.ndim == 1:
-            newdata = newdata[:, None]
+            newdata = self.X_scaled  # already on the cube
+        else:
+            newdata = self._prepare(newdata)
         if mcmc_use is None:
             mcmc_use = np.arange(self.n_samples)
         mcmc_use = np.atleast_1d(np.asarray(mcmc_use, dtype=int))
@@ -136,7 +178,7 @@ class AdaptiveKhaos:
         out = np.empty((mcmc_use.shape[0] * nreps, n_new))
         for cnt, i in enumerate(mcmc_use):
             M = int(self.nbasis[i])
-            B = self.design_matrix(newdata, i)
+            B = self.design_matrix(newdata, i, rescale=False)
             mu = B @ self.beta[i, : M + 1]
             if nugget:
                 sd = np.sqrt(self.s2[i])

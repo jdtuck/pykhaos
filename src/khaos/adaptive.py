@@ -50,6 +50,7 @@ from .gprior import laplace_full, laplace_orth, log_dgsq_full, log_dgsq_orth
 from .likelihood import GPriorState, RidgeState
 from .linalg import rmvnorm_eigen
 from .model import AdaptiveKhaos
+from .scaling import InputScaler, resolve_scaler
 from .proposals import (
     WeightCache,
     log_A_size,
@@ -151,6 +152,8 @@ def _fit(
     move_probs: Sequence[float],
     coin_pars: CoinPars,
     degree_penalty: float,
+    scale_inputs,
+    x_range,
     s2_lower: float,
     a_sigma: float,
     b_sigma: float,
@@ -171,18 +174,20 @@ def _fit(
     rng: np.random.Generator,
     verbose: bool,
 ) -> AdaptiveKhaos:
-    X = _as_matrix(X)
+    X_raw = _as_matrix(X)
     y = np.asarray(y, dtype=float).ravel()
 
-    if X.max() > 1 or X.min() < 0:
-        import warnings
-
-        warnings.warn(
-            "Inputs are expected to be scaled to [0, 1]. Is this intentional?",
-            stacklevel=3,
-        )
-    if y.shape[0] != X.shape[0]:
+    if y.shape[0] != X_raw.shape[0]:
         raise ValueError("len(y) must equal X.shape[0]")
+    if not np.all(np.isfinite(X_raw)):
+        raise ValueError("X contains non-finite values")
+    if not np.all(np.isfinite(y)):
+        raise ValueError("y contains non-finite values")
+
+    # Everything downstream works on the unit hypercube; the scaler is stored
+    # on the fit and re-applied to any new X at prediction time.
+    scaler = resolve_scaler(X_raw, scale_inputs, x_range)
+    X = scaler.transform(X_raw)
 
     n, p = X.shape
     order = min(int(order), p)
@@ -498,9 +503,9 @@ def _fit(
             )
 
     return _assemble(
-        X, y, prior_type, st_nbasis, st_beta, st_s2, st_lam, st_g2, st_ss,
-        st_vars, st_degs, eta, count_accept, count_propose, lik.B,
-        global_max_basis, order,
+        X_raw, X, scaler, y, prior_type, st_nbasis, st_beta, st_s2, st_lam,
+        st_g2, st_ss, st_vars, st_degs, eta, count_accept, count_propose,
+        lik.B, global_max_basis, order,
     )
 
 
@@ -572,9 +577,9 @@ def _update_g2(g0sq, g2_sample, a_g, b_g, g_vec, BtB, rng):
     return g0sq
 
 
-def _assemble(X, y, prior_type, st_nbasis, st_beta, st_s2, st_lam, st_g2,
-              st_ss, st_vars, st_degs, eta, count_accept, count_propose,
-              B_last, global_max_basis, order):
+def _assemble(X_raw, X_scaled, scaler, y, prior_type, st_nbasis, st_beta,
+              st_s2, st_lam, st_g2, st_ss, st_vars, st_degs, eta,
+              count_accept, count_propose, B_last, global_max_basis, order):
     n_keep = len(st_nbasis)
     max_basis_used = max(global_max_basis, 1)
     max_order_used = 1
@@ -601,7 +606,7 @@ def _assemble(X, y, prior_type, st_nbasis, st_beta, st_s2, st_lam, st_g2,
 
     names = ["Birth", "Death", "Mutate (degree)", "Mutate (vars)"]
     return AdaptiveKhaos(
-        X=X,
+        X=X_raw,
         y=y,
         prior_type=prior_type,
         nbasis=nbasis,
@@ -618,6 +623,8 @@ def _assemble(X, y, prior_type, st_nbasis, st_beta, st_s2, st_lam, st_g2,
         count_accept=dict(zip(names, count_accept.tolist())),
         count_propose=dict(zip(names, count_propose.tolist())),
         B=B_last,
+        scaler=scaler,
+        X_scaled=X_scaled,
     )
 
 
@@ -642,6 +649,8 @@ def adaptive_khaos_ridge(
     move_probs: Sequence[float] = (1 / 3, 1 / 3, 1 / 3),
     coin_pars: Optional[CoinPars] = None,
     degree_penalty: float = 0.0,
+    scale_inputs="auto",
+    x_range=None,
     exact_marginal: bool = False,
     legacy_swap: bool = False,
     rcond_tol: float = 1e-9,
@@ -656,7 +665,7 @@ def adaptive_khaos_ridge(
     Parameters
     ----------
     X : array_like of shape (n, p)
-        Predictors, scaled to :math:`[0, 1]`.
+        Predictors, in whatever units you have them; see ``scale_inputs``.
     y : array_like of shape (n,)
         Response.
     degree, order : int
@@ -676,6 +685,19 @@ def adaptive_khaos_ridge(
         Probabilities of (birth, death, mutate).
     degree_penalty : float
         Larger values push the proposal toward lower-degree terms.
+    scale_inputs : {'auto', True, 'minmax', False}
+        How to map ``X`` onto the unit hypercube the basis is orthonormal over.
+        ``'auto'`` (default) leaves inputs alone when they already lie in
+        :math:`[0, 1]` and otherwise fits a per-column min-max map; ``True``
+        always fits one; ``False`` disables rescaling and only warns.  The map
+        is stored on the fit and re-applied inside
+        :meth:`~khaos.model.AdaptiveKhaos.predict`, so you pass -- and get back
+        -- everything in your own units.
+    x_range : array_like, optional
+        Explicit bounds to scale from: ``(lower, upper)`` for every column, or
+        an array of shape ``(2, p)``.  Prefer this to the data min/max whenever
+        the real input ranges are known -- it makes fits comparable across
+        datasets and pins down the measure the Sobol indices refer to.
     exact_marginal : bool
         Use the textbook normal-inverse-gamma marginal
         (``b_sigma + quad/2``) instead of the reference implementation's
@@ -699,7 +721,8 @@ def adaptive_khaos_ridge(
         b_M = 40.0 / y.shape[0]
     return _fit(
         X, y, "ridge", degree, order, nmcmc, nburn, thin, max_basis,
-        move_probs, coin_pars or CoinPars(), degree_penalty, s2_lower,
+        move_probs, coin_pars or CoinPars(), degree_penalty,
+        scale_inputs, x_range, s2_lower,
         a_sigma, b_sigma, a_M, b_M, tau2,
         a_g=1e-3, b_g=1e3, zeta=1.0, g2_sample="f", g2_init=None,
         sync_g2=False, exact_marginal=exact_marginal,
@@ -730,6 +753,8 @@ def adaptive_khaos_gprior(
     move_probs: Sequence[float] = (1 / 3, 1 / 3, 1 / 3),
     coin_pars: Optional[CoinPars] = None,
     degree_penalty: float = 0.0,
+    scale_inputs="auto",
+    x_range=None,
     sync_g2: bool = True,
     exact_marginal: bool = False,
     legacy_swap: bool = False,
@@ -775,7 +800,8 @@ def adaptive_khaos_gprior(
     b_M : float
         Rate of the gamma prior on :math:`\\lambda`; defaults to ``4 / n``.
 
-    Other parameters are as in :func:`adaptive_khaos_ridge`.
+    ``scale_inputs`` and ``x_range`` control the mapping onto the unit
+    hypercube; other parameters are as in :func:`adaptive_khaos_ridge`.
 
     Returns
     -------
@@ -786,7 +812,8 @@ def adaptive_khaos_gprior(
         b_M = 4.0 / y.shape[0]
     return _fit(
         X, y, "gprior", degree, order, nmcmc, nburn, thin, max_basis,
-        move_probs, coin_pars or CoinPars(), degree_penalty, s2_lower,
+        move_probs, coin_pars or CoinPars(), degree_penalty,
+        scale_inputs, x_range, s2_lower,
         a_sigma, b_sigma, a_M, b_M, tau2=1e5,
         a_g=a_g, b_g=b_g, zeta=zeta, g2_sample=g2_sample, g2_init=g2_init,
         sync_g2=sync_g2, exact_marginal=exact_marginal,
