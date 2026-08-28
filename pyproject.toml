@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "khaos"
+name = "pykhaos"
 version = "0.1.0"
 description = "Bayesian adaptive polynomial chaos expansions (RJMCMC) in Python"
 readme = "README.md"
